@@ -34,7 +34,6 @@ def _init_hf():
     if _hf_qa is None:
         from transformers import pipeline
         _hf_qa = pipeline("text2text-generation", model=HF_QA_MODEL)
-
 def _safe_get(url: str, headers: Optional[Dict[str,str]] = None, timeout: int = 15):
     default_headers = {
         "User-Agent": (
@@ -47,10 +46,14 @@ def _safe_get(url: str, headers: Optional[Dict[str,str]] = None, timeout: int = 
         default_headers.update(headers)
     try:
         resp = requests.get(url, headers=default_headers, timeout=timeout, allow_redirects=True)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            print(f"⚠️ Bing returned {resp.status_code} for {url}")
+            return None
         return resp
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Request error: {e}")
         return None
+
 
 def search_news_bing(topic: str, max_results: int = 10):
     from urllib.parse import quote
@@ -68,6 +71,30 @@ def search_news_bing(topic: str, max_results: int = 10):
         soup = BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
         st.error(f"⚠️ Error parsing Bing News results: {e}")
+        def search_news_bing(topic: str, max_results: int = 10):
+    from urllib.parse import quote
+    import streamlit as st
+
+    st.write(f"🔎 Searching Bing News for topic: {topic}")
+    q = quote(topic)
+    url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
+    st.write(f"🧭 URL: {url}")
+
+    resp = _safe_get(url)
+    if resp is None:
+        st.error("❌ Bing request failed (no response). Check your internet connection or firewall.")
+        return []
+
+    st.write(f"✅ Bing response status: {resp.status_code}")
+
+    try:
+        soup = BeautifulSoup(resp.text, "html.parser")
+    except Exception as e:
+        st.error(f"⚠️ Parsing failed: {e}")
+        return []
+
+    # continue as before ...
+
         return []
 
     results = []

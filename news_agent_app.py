@@ -4,7 +4,7 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# Optional text extraction
+# Optional article extractor
 try:
     import trafilatura
 except Exception:
@@ -34,6 +34,7 @@ def _init_hf():
 
 
 def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 15):
+    """Safe request wrapper"""
     default_headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -54,7 +55,7 @@ def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int =
 
 @st.cache_data(show_spinner=False)
 def search_news_bing(topic: str, max_links: int = 5):
-    """Search Bing News for relevant articles."""
+    """Fetch recent news links from Bing."""
     from urllib.parse import quote
     q = quote(topic)
     url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
@@ -84,7 +85,7 @@ def search_news_bing(topic: str, max_links: int = 5):
 
 @st.cache_data(show_spinner=False)
 def extract_article(url: str):
-    """Extract readable text."""
+    """Extract readable text from news."""
     resp = _safe_get(url, timeout=20)
     if not resp:
         return {"url": url, "title": "", "text": ""}
@@ -113,7 +114,7 @@ def has_openai():
 
 
 def openai_chat(messages, model=None, temperature=0.4, max_tokens=1500):
-    """Unified OpenAI call."""
+    """Handle OpenAI calls gracefully."""
     model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     if _openai_mode == "new":
         client = OpenAI()
@@ -128,10 +129,11 @@ def openai_chat(messages, model=None, temperature=0.4, max_tokens=1500):
 
 
 def hf_answer(question: str, context: str):
+    """Fallback using HF model."""
     _init_hf()
     prompt = (
-        "Answer each question separately with a summary and descriptive explanation (4–6 lines). "
-        "Format clearly and cite sources.\n\n"
+        "Answer each question separately in a structured, professional format. "
+        "Start each with 'Q1', 'Q2', etc. followed by an explanation and sources.\n\n"
         f"Context:\n{context}\n\nQuestions:\n{question}\nAnswers:"
     )
     return _hf_qa(prompt, max_new_tokens=700)[0]["generated_text"].strip()
@@ -147,7 +149,7 @@ def compress_text(text: str, words: int = 220):
 # ---------------- STREAMLIT APP ----------------
 st.set_page_config(page_title="Business News AI Agent", page_icon="🗞️", layout="wide")
 
-# Updated CSS (smaller font, softer layout)
+# Polished minimal CSS
 st.markdown("""
 <style>
 h3, h4 {
@@ -179,9 +181,9 @@ a {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🗞️ Business News AI Agent — Interactive Question Mode")
+st.title("🗞️ Business News AI Agent — Structured Insights")
 
-# Sidebar inputs
+# Sidebar
 with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     topic = st.text_input("Topic", value="Lenskart IPO 2025")
@@ -213,7 +215,7 @@ if run_btn:
         st.error("❌ Please add at least one question.")
         st.stop()
 
-    questions_text = "\n".join([f"{i}. {q}" for i, q in enumerate(st.session_state['questions'], 1)])
+    questions_text = "\n".join([f"Q{i}. {q}" for i, q in enumerate(st.session_state['questions'], 1)])
 
     with st.spinner("Fetching latest news..."):
         links = search_news_bing(topic, max_links=max_links)
@@ -222,7 +224,7 @@ if run_btn:
         st.error("❌ No relevant news found.")
         st.stop()
 
-    st.success(f"✅ Found {len(links)} sources.")
+    st.success(f"✅ Found {len(links)} relevant sources.")
     articles = []
     prog = st.progress(0.0)
     for i, r in enumerate(links, 1):
@@ -235,7 +237,7 @@ if run_btn:
     for a in articles:
         st.markdown(f"- [{a.get('title') or 'Untitled'}]({a.get('url')})")
 
-    # Build context
+    # Context building
     context_blocks = []
     for i, a in enumerate(articles[:5], 1):
         text = a.get("text", "")
@@ -253,14 +255,14 @@ if run_btn:
                 "role": "system",
                 "content": (
                     "You are a senior business analyst. "
-                    "For each question, write a structured, readable section:\n\n"
-                    "### <Question>\n"
+                    "Answer each question as a separate section formatted as:\n\n"
+                    "### Q1. <Question>\n"
                     "<div class='answer-block'>\n"
-                    "<b>Summary:</b> one insightful sentence.<br>\n"
-                    "Then 4–6 clear lines of analysis or explanation. Avoid bold text except for 'Summary:'.<br>\n"
+                    "<b>Summary:</b> one insightful line.<br>\n"
+                    "Then 4–6 lines of descriptive analysis using data, trends, and insights.<br>\n"
                     "End with **Sources:** and markdown links.\n"
                     "</div>\n"
-                    "Use Markdown + HTML for spacing and readability."
+                    "Use clear paragraphs. Avoid emojis or decorative numbering."
                 )
             },
             {
@@ -274,11 +276,8 @@ if run_btn:
         except Exception:
             ans = hf_answer(questions_text, context)
 
+    # --- Final clean formatting ---
     ans = ans.replace("</div>", "</div><br>")
-    ans = ans.replace("1.", "#### **1️⃣ ").replace("2.", "#### **2️⃣ ") \
-             .replace("3.", "#### **3️⃣ ").replace("4.", "#### **4️⃣ ") \
-             .replace("5.", "#### **5️⃣ ").replace("6.", "#### **6️⃣ ")
-
     st.markdown("### 💡 Analytical Answers")
     st.markdown(ans, unsafe_allow_html=True)
     st.success("✅ Done — neatly formatted insights generated!")

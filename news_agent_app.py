@@ -4,13 +4,13 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# Optional content extraction
+# Optional text extractor
 try:
     import trafilatura
 except Exception:
     trafilatura = None
 
-# OpenAI and Hugging Face setup
+# --- OpenAI + Hugging Face Setup ---
 _openai_mode = None
 try:
     from openai import OpenAI
@@ -22,7 +22,7 @@ except Exception:
     except Exception:
         _openai_mode = None
 
-HF_QA_MODEL = os.environ.get("HF_QA_MODEL", "google/flan-t5-base")  # faster model
+HF_QA_MODEL = os.environ.get("HF_QA_MODEL", "google/flan-t5-base")  # fast model
 _hf_qa = None
 
 
@@ -35,7 +35,7 @@ def _init_hf():
 
 
 def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 15):
-    """Safely get webpage content with headers."""
+    """Safely request a URL with headers."""
     default_headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -56,22 +56,20 @@ def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int =
         return None
 
 
+@st.cache_data(show_spinner=False)
 def search_news_bing(topic: str, max_links: int = 5):
-    """Scrape Bing News for topic and return recent links."""
+    """Search Bing News for recent articles."""
     from urllib.parse import quote
     q = quote(topic)
     url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
-    st.write(f"🔍 Searching Bing for: {topic}")
 
     resp = _safe_get(url)
     if resp is None:
-        st.error("❌ Could not fetch news from Bing. Possibly blocked or offline.")
         return []
 
     try:
         soup = BeautifulSoup(resp.text, "html.parser")
-    except Exception as e:
-        st.error(f"⚠️ HTML parsing failed: {e}")
+    except Exception:
         return []
 
     results = []
@@ -82,25 +80,24 @@ def search_news_bing(topic: str, max_links: int = 5):
             continue
         if href.startswith('/') or "bing.com" in href:
             continue
-        results.append({"title": title, "url": href, "source": "Bing News"})
+        results.append({"title": title, "url": href})
         if len(results) >= max_links:
             break
 
     # Deduplicate
-    dedup, seen = [], set()
+    seen, dedup = set(), []
     for r in results:
         u = r["url"].split("#")[0]
         if u not in seen:
             seen.add(u)
             dedup.append(r)
 
-    if not dedup:
-        st.warning("⚠️ No relevant articles found. Try another keyword (e.g., 'Lenskart IPO').")
     return dedup[:max_links]
 
 
+@st.cache_data(show_spinner=False)
 def extract_article(url: str):
-    """Extract clean article text and title."""
+    """Extract readable text from article."""
     resp = _safe_get(url, timeout=20)
     if not resp:
         return {"url": url, "title": "", "text": ""}
@@ -131,42 +128,45 @@ def extract_article(url: str):
 
 
 def has_openai():
+    """Check if OpenAI key exists."""
     key = os.environ.get("OPENAI_API_KEY")
     return bool(key and _openai_mode is not None)
 
 
-def openai_chat(messages, model=None, temperature=0.3, max_tokens=600):
-    """Handle OpenAI Chat API (new or legacy)."""
+def openai_chat(messages, model=None, temperature=0.3, max_tokens=800):
+    """OpenAI chat wrapper (new + legacy API)."""
     model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     if _openai_mode == "new":
         try:
             client = OpenAI()
-            r = client.chat.completions.create(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
+            r = client.chat.completions.create(model=model, messages=messages,
+                                               temperature=temperature, max_tokens=max_tokens)
             return r.choices[0].message.content.strip()
         except Exception:
             pass
     try:
         import openai
         openai.api_key = os.environ.get("OPENAI_API_KEY")
-        r = openai.ChatCompletion.create(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
+        r = openai.ChatCompletion.create(model=model, messages=messages,
+                                         temperature=temperature, max_tokens=max_tokens)
         return r["choices"][0]["message"]["content"].strip()
     except Exception as e:
         raise RuntimeError(f"OpenAI call failed: {e}")
 
 
 def hf_answer(question: str, context: str):
-    """Fallback: Answer using Hugging Face model."""
+    """Fallback using Hugging Face model."""
     _init_hf()
     prompt = (
-        f"Answer the question using ONLY the context below. "
-        f"If the answer isn't in the context, say you don't know.\n\n"
-        f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
+        "Answer each question separately using ONLY the context below. "
+        "If something is not mentioned, say 'Not mentioned in the available sources.'\n\n"
+        f"Context:\n{context}\n\nQuestions:\n{question}\n\nAnswers:"
     )
-    return _hf_qa(prompt, max_new_tokens=256)[0]["generated_text"].strip()
+    return _hf_qa(prompt, max_new_tokens=512)[0]["generated_text"].strip()
 
 
 def compress_text(text: str, words: int = 200):
-    """Shorten long article text."""
+    """Shorten article text for faster processing."""
     parts = text.split()
     if len(parts) <= words:
         return text
@@ -176,18 +176,32 @@ def compress_text(text: str, words: int = 200):
 # ---------------- STREAMLIT APP ----------------
 
 st.set_page_config(page_title="Business News AI Agent", page_icon="🗞️", layout="wide")
-st.title("🗞️ Business News AI Agent (Fast Q&A Mode)")
+st.title("🗞️ Business News AI Agent (Multi-Question Mode)")
 
 with st.sidebar:
-    st.markdown("### Settings")
+    st.markdown("### ⚙️ Settings")
     topic = st.text_input("Topic", value="Lenskart IPO 2025")
-    max_links = st.slider("Max article links", min_value=2, max_value=10, value=4, step=1)
-    question = st.text_area("Your question", value="What are the major investor risks mentioned in recent news?")
-    use_run = st.button("Fetch & Answer")
+    max_links = st.slider("Max article links", 2, 10, 5)
+    question = st.text_area(
+        "Your Questions (one per line)",
+        value=(
+            "1. What is the expected valuation of Lenskart's IPO?\n"
+            "2. What are the key risks and challenges for investors?\n"
+            "3. How will the IPO proceeds be used?\n"
+            "4. Who are the major existing investors exiting?\n"
+            "5. What is the market reaction and analyst view?"
+        ),
+        height=180,
+    )
+    run_btn = st.button("🔍 Fetch & Analyze")
 
-if use_run:
-    with st.spinner("🔎 Searching latest news..."):
+if run_btn:
+    with st.spinner("Fetching latest articles..."):
         links = search_news_bing(topic, max_links=max_links)
+
+    if not links:
+        st.error("No articles found. Try another topic.")
+        st.stop()
 
     st.success(f"Found {len(links)} articles.")
     articles = []
@@ -203,7 +217,7 @@ if use_run:
     for a in articles:
         st.markdown(f"- [{a.get('title') or 'Untitled'}]({a.get('url')})")
 
-    # Build concise context
+    # Build short context
     context_blocks = []
     for i, a in enumerate(articles[:5], 1):
         text = a.get("text", "")
@@ -215,24 +229,37 @@ if use_run:
     context = "\n\n---\n\n".join(context_blocks)
 
     if not context_blocks:
-        st.error("❌ No valid news content found for your topic. Try again later.")
-    else:
-        st.info(f"🧠 Using {len(context_blocks)} sources for analysis.")
+        st.error("No valid text found in articles.")
+        st.stop()
 
-        with st.spinner("🧩 Generating AI-based answer..."):
-            messages = [
-                {"role": "system", "content": (
+    st.info(f"🧠 Using {len(context_blocks)} sources for analysis.")
+
+    with st.spinner("Generating structured answers..."):
+        messages = [
+            {
+                "role": "system",
+                "content": (
                     "You are a senior business analyst. "
-                    "Answer the user's question concisely using only the provided sources. "
-                    "Always include clickable markdown links to cite sources."
-                )},
-                {"role": "user", "content": f"Question: {question}\n\nContext:\n{context}"}
-            ]
-            try:
-                ans = openai_chat(messages, max_tokens=600)
-            except Exception:
-                ans = hf_answer(question, context)
+                    "Answer each question separately and clearly in a numbered format. "
+                    "Each answer should be 2–3 lines max, citing sources in markdown (e.g., [Source](url)). "
+                    "If a question isn't covered in the context, write 'Not mentioned in available sources.'"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Below are multiple questions about {topic}.\n"
+                    f"Please answer them separately using the context below.\n\n"
+                    f"Questions:\n{question}\n\nContext:\n{context}"
+                ),
+            },
+        ]
 
-        st.markdown("### 💡 Answer")
-        st.markdown(ans)
-        st.success("✅ Done")
+        try:
+            ans = openai_chat(messages, max_tokens=800)
+        except Exception:
+            ans = hf_answer(question, context)
+
+    st.markdown("### 💡 Structured Answers")
+    st.markdown(ans)
+    st.success("✅ Done")

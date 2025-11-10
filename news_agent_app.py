@@ -56,28 +56,42 @@ def search_news_bing(topic: str, max_results: int = 10):
     from urllib.parse import quote
     q = quote(topic)
     url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
+    
     resp = _safe_get(url)
-    results = []
-    if resp:
+    if resp is None:
+        st.error("❌ Could not fetch news from Bing. Please check your internet connection or try again later.")
+        return []
+    
+    try:
         soup = BeautifulSoup(resp.text, "html.parser")
-        for a in soup.select("a.title, a[href*='http']"):
-            href = a.get("href", "")
-            title = (a.get_text(' ', strip=True) or "").strip()
-            if not href or not title:
-                continue
-            if href.startswith('/') or 'bing.com' in href:
-                continue
-            results.append({"title": title, "url": href, "source": "Bing News"})
-            if len(results) >= max_results:
-                break
-    seen = set()
-    dedup = []
+    except Exception as e:
+        st.error(f"Error parsing Bing News page: {e}")
+        return []
+
+    results = []
+    for a in soup.select("a.title, a[href*='http']"):
+        href = a.get("href", "")
+        title = (a.get_text(' ', strip=True) or "").strip()
+        if not href or not title:
+            continue
+        if href.startswith('/') or 'bing.com' in href:
+            continue
+        results.append({"title": title, "url": href, "source": "Bing News"})
+        if len(results) >= max_results:
+            break
+
+    # Deduplicate
+    seen, dedup = set(), []
     for r in results:
         u = r["url"].split("#")[0]
         if u not in seen:
             seen.add(u)
             dedup.append(r)
+
+    if not dedup:
+        st.warning("⚠️ No results found. Try a different topic (e.g., 'Lenskart IPO 2025').")
     return dedup[:max_results]
+
 
 def extract_article(url: str):
     resp = _safe_get(url, timeout=20)

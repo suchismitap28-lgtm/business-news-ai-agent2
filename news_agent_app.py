@@ -4,13 +4,13 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# --- Optional content extractor ---
+# Optional content extraction
 try:
     import trafilatura
 except Exception:
     trafilatura = None
 
-# --- OpenAI & Hugging Face setup ---
+# OpenAI and Hugging Face setup
 _openai_mode = None
 try:
     from openai import OpenAI
@@ -22,11 +22,12 @@ except Exception:
     except Exception:
         _openai_mode = None
 
-HF_QA_MODEL = os.environ.get("HF_QA_MODEL", "google/flan-t5-large")
+HF_QA_MODEL = os.environ.get("HF_QA_MODEL", "google/flan-t5-base")  # faster model
 _hf_qa = None
 
 
 def _init_hf():
+    """Initialize Hugging Face fallback model."""
     global _hf_qa
     if _hf_qa is None:
         from transformers import pipeline
@@ -34,6 +35,7 @@ def _init_hf():
 
 
 def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 15):
+    """Safely get webpage content with headers."""
     default_headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -54,9 +56,9 @@ def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int =
         return None
 
 
-def search_news_bing(topic: str, max_links: int = 10):
+def search_news_bing(topic: str, max_links: int = 5):
+    """Scrape Bing News for topic and return recent links."""
     from urllib.parse import quote
-
     q = quote(topic)
     url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
     st.write(f"🔍 Searching Bing for: {topic}")
@@ -98,6 +100,7 @@ def search_news_bing(topic: str, max_links: int = 10):
 
 
 def extract_article(url: str):
+    """Extract clean article text and title."""
     resp = _safe_get(url, timeout=20)
     if not resp:
         return {"url": url, "title": "", "text": ""}
@@ -132,7 +135,8 @@ def has_openai():
     return bool(key and _openai_mode is not None)
 
 
-def openai_chat(messages, model=None, temperature=0.3, max_tokens=700):
+def openai_chat(messages, model=None, temperature=0.3, max_tokens=600):
+    """Handle OpenAI Chat API (new or legacy)."""
     model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     if _openai_mode == "new":
         try:
@@ -151,6 +155,7 @@ def openai_chat(messages, model=None, temperature=0.3, max_tokens=700):
 
 
 def hf_answer(question: str, context: str):
+    """Fallback: Answer using Hugging Face model."""
     _init_hf()
     prompt = (
         f"Answer the question using ONLY the context below. "
@@ -160,16 +165,25 @@ def hf_answer(question: str, context: str):
     return _hf_qa(prompt, max_new_tokens=256)[0]["generated_text"].strip()
 
 
-# --- Streamlit App UI ---
+def compress_text(text: str, words: int = 200):
+    """Shorten long article text."""
+    parts = text.split()
+    if len(parts) <= words:
+        return text
+    return " ".join(parts[:120] + ["..."] + parts[-60:])
+
+
+# ---------------- STREAMLIT APP ----------------
+
 st.set_page_config(page_title="Business News AI Agent", page_icon="🗞️", layout="wide")
-st.title("🗞️ Business News AI Agent (Hybrid)")
+st.title("🗞️ Business News AI Agent (Fast Q&A Mode)")
 
 with st.sidebar:
     st.markdown("### Settings")
     topic = st.text_input("Topic", value="Lenskart IPO 2025")
-    max_links = st.slider("Max article links", min_value=3, max_value=20, value=8, step=1)
-    question = st.text_area("Your question", value="What are the key takeaways for investors?")
-    use_run = st.button("Fetch & Analyze")
+    max_links = st.slider("Max article links", min_value=2, max_value=10, value=4, step=1)
+    question = st.text_area("Your question", value="What are the major investor risks mentioned in recent news?")
+    use_run = st.button("Fetch & Answer")
 
 if use_run:
     with st.spinner("🔎 Searching latest news..."):
@@ -189,16 +203,14 @@ if use_run:
     for a in articles:
         st.markdown(f"- [{a.get('title') or 'Untitled'}]({a.get('url')})")
 
-    st.subheader("💬 Q&A")
-
-    # Combine context from all articles
+    # Build concise context
     context_blocks = []
-    for i, a in enumerate(articles, 1):
+    for i, a in enumerate(articles[:5], 1):
         text = a.get("text", "")
-        if not text or len(text.split()) < 80:
+        if not text or len(text.split()) < 50:
             continue
         src = f"[{a.get('title') or 'Untitled'}]({a.get('url')})"
-        context_blocks.append(f"({i}) SOURCE: {src}\n\n{text[:2000]}...")
+        context_blocks.append(f"({i}) SOURCE: {src}\n\n{compress_text(text)}")
 
     context = "\n\n---\n\n".join(context_blocks)
 
@@ -207,28 +219,20 @@ if use_run:
     else:
         st.info(f"🧠 Using {len(context_blocks)} sources for analysis.")
 
-        with st.spinner("Generating AI-based answer..."):
+        with st.spinner("🧩 Generating AI-based answer..."):
             messages = [
                 {"role": "system", "content": (
                     "You are a senior business analyst. "
-                    "Answer the user's question using only the sources provided. "
-                    "Always include clickable markdown links to cite your sources."
+                    "Answer the user's question concisely using only the provided sources. "
+                    "Always include clickable markdown links to cite sources."
                 )},
                 {"role": "user", "content": f"Question: {question}\n\nContext:\n{context}"}
             ]
             try:
-                ans = openai_chat(messages, max_tokens=700)
+                ans = openai_chat(messages, max_tokens=600)
             except Exception:
                 ans = hf_answer(question, context)
 
         st.markdown("### 💡 Answer")
         st.markdown(ans)
-
-    
-
-
-
-    
-      
-    
-        
+        st.success("✅ Done")

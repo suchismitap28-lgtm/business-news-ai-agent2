@@ -54,18 +54,20 @@ def _safe_get(url: str, headers: Optional[Dict[str,str]] = None, timeout: int = 
 
 def search_news_bing(topic: str, max_results: int = 10):
     from urllib.parse import quote
+    import streamlit as st
     q = quote(topic)
     url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
     
+    # Fetch page
     resp = _safe_get(url)
     if resp is None:
-        st.error("❌ Could not fetch news from Bing. Please check your internet connection or try again later.")
+        st.error("❌ Could not fetch news from Bing. Check internet or try again later.")
         return []
     
     try:
         soup = BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
-        st.error(f"Error parsing Bing News page: {e}")
+        st.error(f"⚠️ Error parsing Bing News results: {e}")
         return []
 
     results = []
@@ -74,7 +76,7 @@ def search_news_bing(topic: str, max_results: int = 10):
         title = (a.get_text(' ', strip=True) or "").strip()
         if not href or not title:
             continue
-        if href.startswith('/') or 'bing.com' in href:
+        if href.startswith('/') or "bing.com" in href:
             continue
         results.append({"title": title, "url": href, "source": "Bing News"})
         if len(results) >= max_results:
@@ -89,9 +91,8 @@ def search_news_bing(topic: str, max_results: int = 10):
             dedup.append(r)
 
     if not dedup:
-        st.warning("⚠️ No results found. Try a different topic (e.g., 'Lenskart IPO 2025').")
+        st.warning("⚠️ No recent articles found. Try another topic like 'Lenskart IPO' or 'EV policy India'.")
     return dedup[:max_results]
-
 
 def extract_article(url: str):
     resp = _safe_get(url, timeout=20)

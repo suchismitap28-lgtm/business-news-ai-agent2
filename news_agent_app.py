@@ -231,23 +231,37 @@ if use_run:
     st.subheader("Articles")
     for a in articles:
         st.markdown(f"- [{a.get('title') or 'Untitled'}]({a.get('url')})")
-    st.subheader("Summaries")
-    enriched = []
-    for a in articles:
-        txt = a.get("text") or ""
-        if len(txt.split()) < 80:
-            continue
-        with st.spinner(f"Summarizing: {a.get('title')[:60]}..."):
-            try:
-                s = summarize_text(txt)
-            except Exception:
-                s = ""
-        a["summary"] = s
-        if s:
-            st.markdown(f"**{a.get('title')}**")
-            st.write(s)
-        enriched.append(a)
-    st.subheader("Q&A")
-    with st.spinner("Answering your question..."):
-        ans = answer_question(question, enriched or articles)
+   st.subheader("Q&A")
+
+# Combine content from all articles
+context_blocks = []
+for i, a in enumerate(articles, 1):
+    text = a.get("text", "")
+    if not text or len(text.split()) < 80:
+        continue
+    src = f"[{a.get('title') or 'Untitled'}]({a.get('url')})"
+    context_blocks.append(f"({i}) SOURCE: {src}\n\n{text[:2000]}...")
+
+context = "\n\n---\n\n".join(context_blocks)
+
+if not context_blocks:
+    st.error("❌ No valid news content found for your topic. Try again later.")
+else:
+    st.info(f"📰 Using {len(context_blocks)} sources for context.")
+
+    with st.spinner("Generating answer..."):
+        messages = [
+            {"role": "system", "content": (
+                "You are a senior business analyst. "
+                "Use the given sources to answer the user's question. "
+                "When you cite or mention a source, include its link in markdown format."
+            )},
+            {"role": "user", "content": f"Question: {question}\n\nContext:\n{context}"}
+        ]
+        try:
+            ans = openai_chat(messages, max_tokens=700)
+        except Exception:
+            ans = hf_answer(question, context)
+
+    st.markdown("### 💡 Answer")
     st.markdown(ans)

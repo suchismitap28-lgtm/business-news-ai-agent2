@@ -4,7 +4,7 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# Optional article extractor
+# Optional article text extraction
 try:
     import trafilatura
 except Exception:
@@ -27,6 +27,7 @@ _hf_qa = None
 
 
 def _init_hf():
+    """Initialize HuggingFace model if needed."""
     global _hf_qa
     if _hf_qa is None:
         from transformers import pipeline
@@ -34,7 +35,7 @@ def _init_hf():
 
 
 def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 15):
-    """Safe request wrapper"""
+    """Safe request with fallback headers."""
     default_headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -55,7 +56,7 @@ def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int =
 
 @st.cache_data(show_spinner=False)
 def search_news_bing(topic: str, max_links: int = 5):
-    """Fetch recent news links from Bing."""
+    """Search Bing News for relevant articles."""
     from urllib.parse import quote
     q = quote(topic)
     url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
@@ -85,7 +86,7 @@ def search_news_bing(topic: str, max_links: int = 5):
 
 @st.cache_data(show_spinner=False)
 def extract_article(url: str):
-    """Extract readable text from news."""
+    """Extract readable text from a given news URL."""
     resp = _safe_get(url, timeout=20)
     if not resp:
         return {"url": url, "title": "", "text": ""}
@@ -113,8 +114,8 @@ def has_openai():
     return bool(os.environ.get("OPENAI_API_KEY") and _openai_mode is not None)
 
 
-def openai_chat(messages, model=None, temperature=0.4, max_tokens=1500):
-    """Handle OpenAI calls gracefully."""
+def openai_chat(messages, model=None, temperature=0.4, max_tokens=1800):
+    """Handle OpenAI chat completion."""
     model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     if _openai_mode == "new":
         client = OpenAI()
@@ -129,17 +130,18 @@ def openai_chat(messages, model=None, temperature=0.4, max_tokens=1500):
 
 
 def hf_answer(question: str, context: str):
-    """Fallback using HF model."""
+    """Fallback to HuggingFace model if OpenAI key is not set."""
     _init_hf()
     prompt = (
-        "Answer each question separately in a structured, professional format. "
-        "Start each with 'Q1', 'Q2', etc. followed by an explanation and sources.\n\n"
+        "Answer each question separately and clearly, using structured analysis. "
+        "Include a summary, explanation, and sources.\n\n"
         f"Context:\n{context}\n\nQuestions:\n{question}\nAnswers:"
     )
     return _hf_qa(prompt, max_new_tokens=700)[0]["generated_text"].strip()
 
 
 def compress_text(text: str, words: int = 220):
+    """Compress large article text."""
     parts = text.split()
     if len(parts) <= words:
         return text
@@ -149,7 +151,7 @@ def compress_text(text: str, words: int = 220):
 # ---------------- STREAMLIT APP ----------------
 st.set_page_config(page_title="Business News AI Agent", page_icon="🗞️", layout="wide")
 
-# Polished minimal CSS
+# Elegant CSS for structured readability
 st.markdown("""
 <style>
 h3, h4 {
@@ -181,15 +183,14 @@ a {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🗞️ Business News AI Agent — Structured Insights")
+st.title("🗞️ Business News AI Agent — Analytical Insights")
 
-# Sidebar
+# Sidebar configuration
 with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     topic = st.text_input("Topic", value="Lenskart IPO 2025")
     max_links = st.slider("Max article links", 2, 10, 5)
 
-    # Dynamic questions
     if "questions" not in st.session_state:
         st.session_state["questions"] = []
 
@@ -217,7 +218,7 @@ if run_btn:
 
     questions_text = "\n".join([f"Q{i}. {q}" for i, q in enumerate(st.session_state['questions'], 1)])
 
-    with st.spinner("Fetching latest news..."):
+    with st.spinner("Fetching latest articles..."):
         links = search_news_bing(topic, max_links=max_links)
 
     if not links:
@@ -237,7 +238,7 @@ if run_btn:
     for a in articles:
         st.markdown(f"- [{a.get('title') or 'Untitled'}]({a.get('url')})")
 
-    # Context building
+    # Build context
     context_blocks = []
     for i, a in enumerate(articles[:5], 1):
         text = a.get("text", "")
@@ -249,35 +250,42 @@ if run_btn:
 
     st.info(f"🧠 Using {len(context_blocks)} sources for analysis...")
 
-    with st.spinner("Generating descriptive, structured answers..."):
+    # ---------------- Fixed GPT Prompt ----------------
+    with st.spinner("Generating analytical answers..."):
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are a senior business analyst. "
-                    "Answer each question as a separate section formatted as:\n\n"
-                    "### Q1. <Question>\n"
+                    "You are a senior equity research analyst. "
+                    "Use the provided news context to answer the questions. "
+                    "Write structured answers directly (do not restate questions). "
+                    "For each answer, use the following format:\n\n"
                     "<div class='answer-block'>\n"
-                    "<b>Summary:</b> one insightful line.<br>\n"
-                    "Then 4–6 lines of descriptive analysis using data, trends, and insights.<br>\n"
-                    "End with **Sources:** and markdown links.\n"
+                    "<b>Summary:</b> One concise sentence.<br>\n"
+                    "Then 4–6 lines explaining insights, reasoning, and supporting data.<br>\n"
+                    "End with **Sources:** markdown links.\n"
                     "</div>\n"
-                    "Use clear paragraphs. Avoid emojis or decorative numbering."
+                    "Be professional, factual, and analytical. Avoid decorative numbering or emojis."
                 )
             },
             {
                 "role": "user",
-                "content": f"Topic: {topic}\nQuestions:\n{questions_text}\n\nContext:\n{context}"
+                "content": (
+                    f"Topic: {topic}\n\n"
+                    f"Questions:\n{questions_text}\n\n"
+                    f"Context:\n{context}\n\n"
+                    "Provide one detailed answer block per question as instructed."
+                )
             }
         ]
 
         try:
-            ans = openai_chat(messages, max_tokens=1500)
+            ans = openai_chat(messages, max_tokens=1800)
         except Exception:
             ans = hf_answer(questions_text, context)
 
-    # --- Final clean formatting ---
+    # Clean rendering
     ans = ans.replace("</div>", "</div><br>")
     st.markdown("### 💡 Analytical Answers")
     st.markdown(ans, unsafe_allow_html=True)
-    st.success("✅ Done — neatly formatted insights generated!")
+    st.success("✅ Done — insightful answers generated successfully!")

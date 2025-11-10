@@ -1,0 +1,10 @@
+streamlit
+requests
+beautifulsoup4
+trafilatura
+lxml
+html5lib
+readability-lxml
+openai>=1.0.0
+transformers
+torch

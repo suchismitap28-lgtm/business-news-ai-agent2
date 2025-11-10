@@ -219,7 +219,7 @@ with st.sidebar:
 
 if use_run:
     with st.spinner("Searching latest news..."):
-        links = search_news_bing(topic, max_links=max_links)
+        links = search_news_bing(topic, max_results=max_links)
     st.success(f"Found {len(links)} links.")
     articles = []
     prog = st.progress(0.0)

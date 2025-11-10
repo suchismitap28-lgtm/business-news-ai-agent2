@@ -4,13 +4,12 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 
-# Optional text extractor
 try:
     import trafilatura
 except Exception:
     trafilatura = None
 
-# --- OpenAI + Hugging Face Setup ---
+# --- OpenAI & Hugging Face setup ---
 _openai_mode = None
 try:
     from openai import OpenAI
@@ -22,12 +21,11 @@ except Exception:
     except Exception:
         _openai_mode = None
 
-HF_QA_MODEL = os.environ.get("HF_QA_MODEL", "google/flan-t5-base")  # fast model
+HF_QA_MODEL = os.environ.get("HF_QA_MODEL", "google/flan-t5-base")
 _hf_qa = None
 
 
 def _init_hf():
-    """Initialize Hugging Face fallback model."""
     global _hf_qa
     if _hf_qa is None:
         from transformers import pipeline
@@ -35,7 +33,6 @@ def _init_hf():
 
 
 def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 15):
-    """Safely request a URL with headers."""
     default_headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -48,30 +45,22 @@ def _safe_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: int =
     try:
         resp = requests.get(url, headers=default_headers, timeout=timeout, allow_redirects=True)
         if resp.status_code != 200:
-            print(f"⚠️ Bing returned {resp.status_code} for {url}")
             return None
         return resp
-    except Exception as e:
-        print(f"⚠️ Request error: {e}")
+    except Exception:
         return None
 
 
 @st.cache_data(show_spinner=False)
 def search_news_bing(topic: str, max_links: int = 5):
-    """Search Bing News for recent articles."""
+    """Search Bing News for topic."""
     from urllib.parse import quote
     q = quote(topic)
     url = f"https://www.bing.com/news/search?q={q}&qft=sortbydate%3d%221%22"
-
     resp = _safe_get(url)
     if resp is None:
         return []
-
-    try:
-        soup = BeautifulSoup(resp.text, "html.parser")
-    except Exception:
-        return []
-
+    soup = BeautifulSoup(resp.text, "html.parser")
     results = []
     for a in soup.select("a.title, a[href*='http']"):
         href = a.get("href", "")
@@ -83,21 +72,18 @@ def search_news_bing(topic: str, max_links: int = 5):
         results.append({"title": title, "url": href})
         if len(results) >= max_links:
             break
-
-    # Deduplicate
     seen, dedup = set(), []
     for r in results:
         u = r["url"].split("#")[0]
         if u not in seen:
             seen.add(u)
             dedup.append(r)
-
     return dedup[:max_links]
 
 
 @st.cache_data(show_spinner=False)
 def extract_article(url: str):
-    """Extract readable text from article."""
+    """Extract text from article."""
     resp = _safe_get(url, timeout=20)
     if not resp:
         return {"url": url, "title": "", "text": ""}
@@ -112,8 +98,7 @@ def extract_article(url: str):
             pass
     if not text:
         soup = BeautifulSoup(resp.text, "html.parser")
-        node = (soup.select_one("article") or soup.select_one("[role='article']")
-                or soup.select_one(".article") or soup.select_one(".post") or soup.select_one(".story"))
+        node = soup.select_one("article") or soup.select_one("[role='article']") or soup.select_one(".post")
         if node:
             text = node.get_text(" ", strip=True)
         else:
@@ -128,55 +113,65 @@ def extract_article(url: str):
 
 
 def has_openai():
-    """Check if OpenAI key exists."""
-    key = os.environ.get("OPENAI_API_KEY")
-    return bool(key and _openai_mode is not None)
+    return bool(os.environ.get("OPENAI_API_KEY") and _openai_mode is not None)
 
 
-def openai_chat(messages, model=None, temperature=0.3, max_tokens=800):
-    """OpenAI chat wrapper (new + legacy API)."""
+def openai_chat(messages, model=None, temperature=0.3, max_tokens=1000):
     model = model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     if _openai_mode == "new":
-        try:
-            client = OpenAI()
-            r = client.chat.completions.create(model=model, messages=messages,
-                                               temperature=temperature, max_tokens=max_tokens)
-            return r.choices[0].message.content.strip()
-        except Exception:
-            pass
-    try:
-        import openai
-        openai.api_key = os.environ.get("OPENAI_API_KEY")
-        r = openai.ChatCompletion.create(model=model, messages=messages,
-                                         temperature=temperature, max_tokens=max_tokens)
-        return r["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        raise RuntimeError(f"OpenAI call failed: {e}")
+        client = OpenAI()
+        r = client.chat.completions.create(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
+        return r.choices[0].message.content.strip()
+    import openai
+    openai.api_key = os.environ.get("OPENAI_API_KEY")
+    r = openai.ChatCompletion.create(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
+    return r["choices"][0]["message"]["content"].strip()
 
 
 def hf_answer(question: str, context: str):
-    """Fallback using Hugging Face model."""
     _init_hf()
     prompt = (
-        "Answer each question separately using ONLY the context below. "
-        "If something is not mentioned, say 'Not mentioned in the available sources.'\n\n"
-        f"Context:\n{context}\n\nQuestions:\n{question}\n\nAnswers:"
+        "Answer each question separately, clearly numbered, with 2–3 lines each. "
+        "If something isn't in the context, say 'Not mentioned.'\n\n"
+        f"Context:\n{context}\n\nQuestions:\n{question}\nAnswers:"
     )
     return _hf_qa(prompt, max_new_tokens=512)[0]["generated_text"].strip()
 
 
-def compress_text(text: str, words: int = 200):
-    """Shorten article text for faster processing."""
+def compress_text(text: str, words: int = 180):
     parts = text.split()
     if len(parts) <= words:
         return text
     return " ".join(parts[:120] + ["..."] + parts[-60:])
 
 
-# ---------------- STREAMLIT APP ----------------
+# ---------- Streamlit UI ----------
 
 st.set_page_config(page_title="Business News AI Agent", page_icon="🗞️", layout="wide")
-st.title("🗞️ Business News AI Agent (Multi-Question Mode)")
+
+# Custom CSS for visual structure
+st.markdown("""
+<style>
+h3 {
+    color: #004080;
+    font-weight: 700;
+    margin-top: 1.5em;
+    margin-bottom: 0.3em;
+}
+div.answer-block {
+    background-color: #f9fafb;
+    border-radius: 12px;
+    padding: 15px 20px;
+    margin-bottom: 1em;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+hr {
+    margin: 20px 0;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🗞️ Business News AI Agent (Structured Multi-Question Mode)")
 
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
@@ -186,10 +181,10 @@ with st.sidebar:
         "Your Questions (one per line)",
         value=(
             "1. What is the expected valuation of Lenskart's IPO?\n"
-            "2. What are the key risks and challenges for investors?\n"
+            "2. What are the key risks for investors?\n"
             "3. How will the IPO proceeds be used?\n"
-            "4. Who are the major existing investors exiting?\n"
-            "5. What is the market reaction and analyst view?"
+            "4. Who are the major investors exiting?\n"
+            "5. What is the market reaction so far?"
         ),
         height=180,
     )
@@ -206,7 +201,6 @@ if run_btn:
     st.success(f"Found {len(links)} articles.")
     articles = []
     prog = st.progress(0.0)
-
     for i, r in enumerate(links, 1):
         a = extract_article(r["url"])
         a["title"] = a.get("title") or r.get("title") or ""
@@ -217,7 +211,7 @@ if run_btn:
     for a in articles:
         st.markdown(f"- [{a.get('title') or 'Untitled'}]({a.get('url')})")
 
-    # Build short context
+    # Prepare context
     context_blocks = []
     for i, a in enumerate(articles[:5], 1):
         text = a.get("text", "")
@@ -227,12 +221,11 @@ if run_btn:
         context_blocks.append(f"({i}) SOURCE: {src}\n\n{compress_text(text)}")
 
     context = "\n\n---\n\n".join(context_blocks)
-
     if not context_blocks:
-        st.error("No valid text found in articles.")
+        st.error("No valid text found.")
         st.stop()
 
-    st.info(f"🧠 Using {len(context_blocks)} sources for analysis.")
+    st.info(f"🧠 Using {len(context_blocks)} sources for analysis...")
 
     with st.spinner("Generating structured answers..."):
         messages = [
@@ -240,26 +233,22 @@ if run_btn:
                 "role": "system",
                 "content": (
                     "You are a senior business analyst. "
-                    "Answer each question separately and clearly in a numbered format. "
-                    "Each answer should be 2–3 lines max, citing sources in markdown (e.g., [Source](url)). "
-                    "If a question isn't covered in the context, write 'Not mentioned in available sources.'"
-                ),
+                    "Answer each question separately in a structured, numbered format. "
+                    "Each answer must be 2–3 lines max, clear, and professional. "
+                    "Cite sources inline in markdown (e.g., [Source](url)). "
+                    "Return each answer as HTML blocks with headings <h3> for question and a <div class='answer-block'> for the answer text."
+                )
             },
             {
                 "role": "user",
-                "content": (
-                    f"Below are multiple questions about {topic}.\n"
-                    f"Please answer them separately using the context below.\n\n"
-                    f"Questions:\n{question}\n\nContext:\n{context}"
-                ),
-            },
+                "content": f"Questions:\n{question}\n\nContext:\n{context}"
+            }
         ]
-
         try:
-            ans = openai_chat(messages, max_tokens=800)
+            ans = openai_chat(messages, max_tokens=1000)
         except Exception:
             ans = hf_answer(question, context)
 
     st.markdown("### 💡 Structured Answers")
-    st.markdown(ans)
+    st.markdown(ans, unsafe_allow_html=True)
     st.success("✅ Done")
